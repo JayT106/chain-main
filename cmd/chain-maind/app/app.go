@@ -137,7 +137,24 @@ func initRootCmd(rootCmd *cobra.Command, encodingConfig params.EncodingConfig) {
 		if err != nil {
 			return err
 		}
+
+		tmpFilePath := cleanedPath + ".tmp"
+		tmpFile, err := os.Create(tmpFilePath)
+		if err != nil {
+			return err
+		}
+
 		defer func() {
+			if _, e := os.Stat(tmpFilePath); e == nil {
+				if rmErr := os.Remove(tmpFilePath); rmErr != nil {
+					fmt.Printf("Warning remove tmpFile failed!: %s\n", rmErr)
+				}
+			}
+
+			if closeErr := tmpFile.Close(); closeErr != nil {
+				fmt.Printf("Error closing tmpFile: %s\n", closeErr)
+			}
+
 			if closeErr := file.Close(); closeErr != nil {
 				fmt.Printf("Error closing file: %s\n", closeErr)
 			}
@@ -150,13 +167,24 @@ func initRootCmd(rootCmd *cobra.Command, encodingConfig params.EncodingConfig) {
 		if err := mergo.Merge(&genesis, genesisPatch, mergo.WithOverride); err != nil {
 			return err
 		}
-		if err := file.Truncate(0); err != nil {
+
+		if err := json.NewEncoder(tmpFile).Encode(&genesis); err != nil {
 			return err
 		}
-		if _, err := file.Seek(0, 0); err != nil {
+
+		if err := tmpFile.Sync(); err != nil {
 			return err
 		}
-		return json.NewEncoder(file).Encode(&genesis)
+
+		if err := os.Rename(tmpFilePath, cleanedPath); err != nil {
+			return err
+		}
+
+		if err := tmpFile.Sync(); err != nil {
+			return err
+		}
+
+		return nil
 	}
 
 	rootCmd.AddCommand(
