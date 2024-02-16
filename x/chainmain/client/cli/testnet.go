@@ -328,7 +328,6 @@ func InitTestnet(
 			stakingCoin,
 			stakingtypes.NewDescription(nodeDirName, "", "", "", ""),
 			stakingtypes.NewCommissionRates(sdk.NewDecWithPrec(1, 1), sdk.NewDecWithPrec(2, 1), sdk.NewDecWithPrec(1, 2)),
-			sdk.OneInt(),
 		)
 		if err2 != nil {
 			return err2
