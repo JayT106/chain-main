@@ -6,7 +6,6 @@ local validator = import 'validator.jsonnet';
     validators: [validator, validator] + [{
       coins: '1cro',
       staked: '1cro',
-      min_self_delegation: 10000000,  // 0.1cro
       client_config: {
         'broadcast-mode': 'sync',
       },
