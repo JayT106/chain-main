@@ -22,9 +22,6 @@ import (
 	icahostkeeper "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/host/keeper"
 	icahosttypes "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/host/types"
 	icatypes "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/types"
-	ibcfee "github.com/cosmos/ibc-go/v10/modules/apps/29-fee"
-	ibcfeekeeper "github.com/cosmos/ibc-go/v10/modules/apps/29-fee/keeper"
-	ibcfeetypes "github.com/cosmos/ibc-go/v10/modules/apps/29-fee/types"
 	transfer "github.com/cosmos/ibc-go/v10/modules/apps/transfer"
 	ibctransferkeeper "github.com/cosmos/ibc-go/v10/modules/apps/transfer/keeper"
 	ibctransfertypes "github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
@@ -39,6 +36,9 @@ import (
 	"github.com/crypto-org-chain/chain-main/v4/x/chainmain"
 	chainmainkeeper "github.com/crypto-org-chain/chain-main/v4/x/chainmain/keeper"
 	chainmaintypes "github.com/crypto-org-chain/chain-main/v4/x/chainmain/types"
+	maxsupply "github.com/crypto-org-chain/chain-main/v4/x/maxsupply"
+	maxsupplykeeper "github.com/crypto-org-chain/chain-main/v4/x/maxsupply/keeper"
+	maxsupplytypes "github.com/crypto-org-chain/chain-main/v4/x/maxsupply/types"
 	"github.com/crypto-org-chain/chain-main/v4/x/nft"
 	nfttransfer "github.com/crypto-org-chain/chain-main/v4/x/nft-transfer"
 	nfttransferkeeper "github.com/crypto-org-chain/chain-main/v4/x/nft-transfer/keeper"
@@ -166,7 +166,6 @@ var (
 		stakingtypes.NotBondedPoolName: {authtypes.Burner, authtypes.Staking},
 		govtypes.ModuleName:            {authtypes.Burner},
 		ibctransfertypes.ModuleName:    {authtypes.Minter, authtypes.Burner},
-		ibcfeetypes.ModuleName:         nil,
 		icatypes.ModuleName:            nil,
 	}
 	// module accounts that are allowed to receive tokens
@@ -178,10 +177,12 @@ var (
 	_ servertypes.Application = (*ChainApp)(nil)
 )
 
+// RootMultiStore this is source from https://github.com/crypto-org-chain/cosmos-sdk/blob/release/v0.50.x/store/types/store.go
 type RootMultiStore interface {
 	storetypes.MultiStore
 
-	LoadLatestVersion() error
+	// LatestVersion returns the latest version in the store
+	LatestVersion() int64
 }
 
 // ChainApp extends an ABCI application, but with most of its parameters exported.
@@ -213,7 +214,6 @@ type ChainApp struct {
 	UpgradeKeeper         upgradekeeper.Keeper
 	ParamsKeeper          paramskeeper.Keeper
 	IBCKeeper             *ibckeeper.Keeper // IBC Keeper must be a pointer in the app, so we can SetRouter on it correctly
-	IBCFeeKeeper          ibcfeekeeper.Keeper
 	ICAControllerKeeper   icacontrollerkeeper.Keeper
 	ICAHostKeeper         icahostkeeper.Keeper
 	AuthzKeeper           authzkeeper.Keeper
@@ -227,6 +227,7 @@ type ChainApp struct {
 	SupplyKeeper          supplykeeper.Keeper
 	NFTKeeper             nftkeeper.Keeper
 	CircuitKeeper         circuitkeeper.Keeper
+	MaxSupplyKeeper       maxsupplykeeper.Keeper
 
 	// the module manager
 	ModuleManager      *module.Manager
@@ -429,52 +430,40 @@ func New(
 		),
 	)
 
-	// IBC Fee Module keeper
-	app.IBCFeeKeeper = ibcfeekeeper.NewKeeper(
-		appCodec, runtime.NewKVStoreService(keys[ibcfeetypes.StoreKey]),
-		app.IBCKeeper.ChannelKeeper, // more middlewares can be added in future
-		app.IBCKeeper.ChannelKeeper,
-		app.AccountKeeper, app.BankKeeper,
-	)
-
 	// Create Transfer Keepers
 	app.TransferKeeper = ibctransferkeeper.NewKeeper(
 		appCodec, runtime.NewKVStoreService(keys[ibctransfertypes.StoreKey]), app.GetSubspace(ibctransfertypes.ModuleName),
-		app.IBCFeeKeeper, // ISC4 Wrapper: fee IBC middleware
 		app.IBCKeeper.ChannelKeeper,
+		app.IBCKeeper.ChannelKeeper,
+		app.MsgServiceRouter(),
 		app.AccountKeeper, app.BankKeeper,
 		authAddr,
 	)
 	transferModule := transfer.NewAppModule(app.TransferKeeper)
-	feeModule := ibcfee.NewAppModule(app.IBCFeeKeeper)
 
-	var transferStack porttypes.IBCModule
-	transferStack = transfer.NewIBCModule(app.TransferKeeper)
-	transferStack = ibcfee.NewIBCMiddleware(transferStack, app.IBCFeeKeeper)
+	var transferStack porttypes.IBCModule = transfer.NewIBCModule(app.TransferKeeper)
 
 	app.NFTTransferKeeper = nfttransferkeeper.NewKeeper(
 		appCodec,
 		keys[nfttransfertypes.StoreKey],
-		app.IBCFeeKeeper,
+		app.IBCKeeper.ChannelKeeper,
 		app.IBCKeeper.ChannelKeeper,
 		app.NFTKeeper,
 		app.AccountKeeper,
 	)
 
-	var nftTransferStack porttypes.IBCModule
-	nftTransferStack = nfttransfer.NewIBCModule(app.NFTTransferKeeper)
-	nftTransferStack = ibcfee.NewIBCMiddleware(nftTransferStack, app.IBCFeeKeeper)
+	var nftTransferStack porttypes.IBCModule = nfttransfer.NewIBCModule(app.NFTTransferKeeper)
 
 	app.ICAControllerKeeper = icacontrollerkeeper.NewKeeper(
 		appCodec, runtime.NewKVStoreService(keys[icacontrollertypes.StoreKey]), app.GetSubspace(icacontrollertypes.SubModuleName),
-		app.IBCFeeKeeper, // ISC4 Wrapper: fee IBC middleware
+		app.IBCKeeper.ChannelKeeper,
 		app.IBCKeeper.ChannelKeeper,
 		app.MsgServiceRouter(),
 		authAddr,
 	)
 	app.ICAHostKeeper = icahostkeeper.NewKeeper(
 		appCodec, runtime.NewKVStoreService(keys[icahosttypes.StoreKey]), app.GetSubspace(icahosttypes.SubModuleName),
-		app.IBCFeeKeeper, // ISC4 Wrapper: fee IBC middleware
+		app.IBCKeeper.ChannelKeeper,
 		app.IBCKeeper.ChannelKeeper,
 		app.AccountKeeper, app.MsgServiceRouter(),
 		app.GRPCQueryRouter(),
@@ -482,13 +471,9 @@ func New(
 	)
 	icaModule := ica.NewAppModule(&app.ICAControllerKeeper, &app.ICAHostKeeper)
 
-	var icaControllerStack porttypes.IBCModule
-	icaControllerStack = icacontroller.NewIBCMiddleware(app.ICAControllerKeeper)
-	icaControllerStack = ibcfee.NewIBCMiddleware(icaControllerStack, app.IBCFeeKeeper)
+	var icaControllerStack porttypes.IBCModule = icacontroller.NewIBCMiddleware(app.ICAControllerKeeper)
 
-	var icaHostStack porttypes.IBCModule
-	icaHostStack = icahost.NewIBCModule(app.ICAHostKeeper)
-	icaHostStack = ibcfee.NewIBCMiddleware(icaHostStack, app.IBCFeeKeeper)
+	var icaHostStack porttypes.IBCModule = icahost.NewIBCModule(app.ICAHostKeeper)
 
 	// Create static IBC router, add transfer route, then set and seal it
 	ibcRouter := porttypes.NewRouter()
@@ -524,6 +509,15 @@ func New(
 		app.AccountKeeper.AddressCodec(),
 	)
 	app.SetCircuitBreaker(&app.CircuitKeeper)
+
+	app.MaxSupplyKeeper = maxsupplykeeper.NewKeeper(
+		appCodec,
+		runtime.NewKVStoreService(keys[maxsupplytypes.StoreKey]),
+		logger,
+		app.BankKeeper,
+		app.StakingKeeper,
+		authAddr,
+	)
 
 	// NOTE: Any module instantiated in the module manager that is later modified
 	// must be passed by reference here.
@@ -561,12 +555,12 @@ func New(
 		groupmodule.NewAppModule(appCodec, app.GroupKeeper, app.AccountKeeper, app.BankKeeper, app.interfaceRegistry),
 		transferModule,
 		nfttransfer.NewAppModule(app.NFTTransferKeeper),
-		feeModule,
 		icaModule,
 		chainmain.NewAppModule(app.chainmainKeeper),
 		supply.NewAppModule(app.SupplyKeeper),
 		nft.NewAppModule(appCodec, app.NFTKeeper, app.AccountKeeper, app.BankKeeper),
 		circuit.NewAppModule(appCodec, app.CircuitKeeper),
+		maxsupply.NewAppModule(appCodec, app.MaxSupplyKeeper),
 	)
 
 	// BasicModuleManager defines the module BasicManager is in charge of setting up basic,
@@ -609,11 +603,11 @@ func New(
 		paramstypes.ModuleName,
 		vestingtypes.ModuleName,
 		icatypes.ModuleName,
-		ibcfeetypes.ModuleName,
 		chainmaintypes.ModuleName,
 		nfttypes.ModuleName,
 		nfttransfertypes.ModuleName,
 		supplytypes.ModuleName,
+		maxsupplytypes.ModuleName,
 		consensusparamtypes.ModuleName,
 		circuittypes.ModuleName,
 	)
@@ -636,11 +630,11 @@ func New(
 		upgradetypes.ModuleName,
 		vestingtypes.ModuleName,
 		icatypes.ModuleName,
-		ibcfeetypes.ModuleName,
 		chainmaintypes.ModuleName,
 		nfttypes.ModuleName,
 		nfttransfertypes.ModuleName,
 		supplytypes.ModuleName,
+		maxsupplytypes.ModuleName,
 		consensusparamtypes.ModuleName,
 		circuittypes.ModuleName,
 	)
@@ -666,9 +660,9 @@ func New(
 		group.ModuleName,
 		ibctransfertypes.ModuleName,
 		icatypes.ModuleName,
-		ibcfeetypes.ModuleName,
 		chainmaintypes.ModuleName,
 		supplytypes.ModuleName,
+		maxsupplytypes.ModuleName,
 		nfttypes.ModuleName,
 		nfttransfertypes.ModuleName,
 		paramstypes.ModuleName,
@@ -1036,9 +1030,9 @@ func StoreKeys() (
 		authzkeeper.StoreKey,
 		nfttransfertypes.StoreKey,
 		group.StoreKey,
-		ibcfeetypes.StoreKey,
 		chainmaintypes.StoreKey,
 		supplytypes.StoreKey,
+		maxsupplytypes.StoreKey,
 		nfttypes.StoreKey,
 		consensusparamtypes.StoreKey,
 		circuittypes.StoreKey,
