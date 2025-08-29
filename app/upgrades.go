@@ -21,6 +21,12 @@ import (
 
 // CircuitSuperAdmins maps chain IDs to their super admin addresses
 var CircuitSuperAdmins = map[string][]string{
+	"chaintest": {
+		"cro1jgt29q28ehyc6p0fd5wqhwswfxv59lhppz3v65",
+		"cro1sjcrmp0ngft2n2r3r4gcva4llfj8vjdnefdg4m", // ecosystem
+	},
+	"testnet-croeseid-4": {
+		"tcro14thaw89nlpp8hjm83z6zp3w5ymlpgg2zejncw7",
 		"tcro19uhea66tnx78r5258sq5vdad8msk47w6vn8f06",
 	},
 	"crypto-org-chain-mainnet-dryrun-1": {
